@@ -1,4 +1,5 @@
 # Stock Alert Agent
+## AI Generated most of the code
 
 A lightweight stock monitoring and research alert agent that can run as a
 script or as a Dockerized FastAPI service.
