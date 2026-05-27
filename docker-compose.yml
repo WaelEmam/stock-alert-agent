@@ -1,0 +1,11 @@
+services:
+  stock-alert-agent:
+    build: .
+    container_name: stock-alert-agent
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped

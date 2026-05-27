@@ -1,0 +1,50 @@
+agent:
+  name: "Home Stock Alert Agent"
+  model: "gpt-4.1-mini"
+  timezone: "America/Toronto"
+
+alerts:
+  send_per_stock_review: true
+  send_daily_summary: true
+  send_only_if_triggered: false
+  min_alert_score: 5
+
+data:
+  price_provider: "yahoo"
+  yfinance:
+    retries: 2
+    debug: false
+    proxy:
+
+portfolio:
+  max_single_position_pct: 15
+
+watchlist:
+  - ticker: "SNOW"
+    name: "Snowflake"
+    position_pct: 25
+    cost_basis: 125
+    strategy: "exit_review"
+
+  - ticker: "RY.TO"
+    name: "Royal Bank of Canada"
+    position_pct: 75
+    cost_basis: 140
+    strategy: "long_term_growth"
+rules:
+  technical:
+    rsi_overbought: 70
+    rsi_oversold: 30
+    below_200dma_sell_review: true
+    above_50dma_buy_review: true
+    above_200dma_buy_review: true
+
+  risk:
+    stop_loss_pct: -15
+    take_profit_pct: 40
+    max_position_pct: 15
+
+  scoring:
+    buy_review_threshold: 7
+    sell_review_threshold: -5
+    urgent_review_threshold: -8
