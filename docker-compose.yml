@@ -1,6 +1,6 @@
 services:
   stock-alert-agent:
-    build: .
+    image: waelemam/stock-alert-agent:latest
     container_name: stock-alert-agent
     env_file:
       - .env
