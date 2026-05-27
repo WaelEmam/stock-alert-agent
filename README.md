@@ -56,7 +56,7 @@ If you do not provide an OpenAI API key, the rule-based alerts can still run, bu
 These steps assume you are working from this project folder:
 
 ```bash
-cd /Users/waelemam/Documents/Projects/stock-alert-agent
+cd Documents/Projects/stock-alert-agent
 ```
 
 ### 1. Confirm Python is installed
@@ -591,7 +591,7 @@ Each time you open a new terminal, activate the virtual environment before
 running the project:
 
 ```bash
-cd /Users/waelemam/Documents/Projects/stock-alert-agent
+cd Documents/Projects/stock-alert-agent
 source venv/bin/activate
 python main.py
 ```
