@@ -355,16 +355,6 @@ Actions, or another automation tool.
 
 ## Common Setup Issues
 
-### `pip install -r requirements.txt` fails
-
-Use the current filename:
-
-```bash
-pip install -r requirments.txt
-```
-
-The project file is misspelled as `requirments.txt`.
-
 ### `Missing DISCORD_WEBHOOK_URL in .env` When Sending Discord Messages
 
 This only matters when `python main.py` is configured to send Discord messages
@@ -385,99 +375,6 @@ OPENAI_API_KEY="sk-..."
 ```
 
 Or leave it unset if you only want rule-based Discord alerts.
-
-### Yahoo Finance connection error
-
-If you see an error like this:
-
-```text
-Failed to connect to fc.yahoo.com port 443
-```
-
-The code is failing while `yfinance` tries to connect to Yahoo Finance. This is
-usually not a ticker problem. It is usually one of these:
-
-- temporary Yahoo Finance availability issue
-- internet connection issue
-- VPN or firewall blocking Yahoo Finance
-- DNS issue
-- corporate or school network blocking `fc.yahoo.com`
-
-Things to try:
-
-```bash
-python main.py
-```
-
-Run it again after a minute. The code now uses yfinance's network retry config
-and also retries the required price-history request before failing.
-
-To get more detail from yfinance, temporarily enable debug mode:
-
-```yaml
-data:
-  price_provider: "yahoo"
-  yfinance:
-    retries: 2
-    debug: true
-    proxy:
-```
-
-Then rerun:
-
-```bash
-python main.py
-```
-
-If it still fails, test direct access to Yahoo's endpoint:
-
-```bash
-curl -I https://fc.yahoo.com
-```
-
-If that command cannot connect, the issue is network access to Yahoo Finance,
-not the Python code.
-
-If your error includes `curl:` and `curl_cffi` is installed, try the yfinance
-documented requests fallback. First check whether `curl_cffi` is installed:
-
-```bash
-python -c "import importlib.util; print(importlib.util.find_spec('curl_cffi') is not None)"
-```
-
-If it prints `True`, reinstall yfinance without `curl_cffi`:
-
-```bash
-pip uninstall -y yfinance curl_cffi
-curl -fsSL https://raw.githubusercontent.com/ranaroussi/yfinance/main/requirements.txt | grep -vi '^curl_cffi' | pip install -r /dev/stdin
-pip install --no-deps yfinance
-```
-
-Then verify:
-
-```bash
-python -c "import importlib.util, yfinance as yf; print(yf.__version__); print(importlib.util.find_spec('curl_cffi') is None)"
-```
-
-After that, rerun:
-
-```bash
-python main.py
-```
-
-If your network requires a proxy, set it in `config.yaml`:
-
-```yaml
-data:
-  price_provider: "yahoo"
-  yfinance:
-    retries: 2
-    debug: false
-    proxy: "http://your-proxy-server:port"
-```
-
-You can also try disconnecting from VPN, changing Wi-Fi networks, or running the
-agent from a home network instead of a restricted network.
 
 ## Watchlist Fields
 
