@@ -56,7 +56,7 @@ If you do not provide an OpenAI API key, the rule-based alerts can still run, bu
 These steps assume you are working from this project folder:
 
 ```bash
-cd Documents/Projects/stock-alert-agent
+cd /Users/waelemam/Documents/Projects/stock-alert-agent
 ```
 
 ### 1. Confirm Python is installed
@@ -591,7 +591,7 @@ Each time you open a new terminal, activate the virtual environment before
 running the project:
 
 ```bash
-cd Documents/Projects/stock-alert-agent
+cd /Users/waelemam/Documents/Projects/stock-alert-agent
 source venv/bin/activate
 python main.py
 ```
@@ -656,6 +656,9 @@ http://localhost:8000/docs
 
 ### Run With Docker Compose
 
+Use this when you are running from the project folder and want Docker Compose to
+build the image locally.
+
 Build and start the service:
 
 ```bash
@@ -686,23 +689,100 @@ Stop the service:
 docker compose down
 ```
 
-### Run With Docker Directly
+### Deploy From Docker Hub With Docker Compose
 
-Build the image:
+Use this style when the image is already published to Docker Hub and the server
+should pull it instead of building locally.
 
-```bash
-docker build -t stock-alert-agent .
+Example `docker-compose.yml`:
+
+```yaml
+services:
+  stock-alert-agent:
+    image: waelemam/stock-alert-agent:latest
+    container_name: stock-alert-agent
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+    ports:
+      - "8898:8000"
+    volumes:
+      - /containers/stock-alert-agent/config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
 ```
 
-Run the container:
+Create the host folder:
 
 ```bash
-docker run --rm \
-  --env-file .env \
-  -p 8000:8000 \
-  -v "$(pwd)/config.yaml:/app/config.yaml:ro" \
-  stock-alert-agent
+mkdir -p /containers/stock-alert-agent
 ```
+
+Create the host config file:
+
+```bash
+nano /containers/stock-alert-agent/config.yaml
+```
+
+Paste your `config.yaml` content into that file. The left side of the volume
+mount must be a real file on the host:
+
+```text
+/containers/stock-alert-agent/config.yaml
+```
+
+The right side is the file path inside the container:
+
+```text
+/app/config.yaml
+```
+
+Start the stack:
+
+```bash
+docker compose up -d
+```
+
+Check logs:
+
+```bash
+docker compose logs -f stock-alert-agent
+```
+
+Open the API:
+
+```text
+http://SERVER_IP:8898
+```
+
+This redirects to:
+
+```text
+http://SERVER_IP:8898/docs
+```
+
+#### Environment Variables For Compose
+
+If your compose file uses:
+
+```yaml
+environment:
+  - OPENAI_API_KEY=${OPENAI_API_KEY}
+  - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+  - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+```
+
+then define those variables in the same environment where Compose runs, or put
+them in a `.env` file next to `docker-compose.yml`:
+
+```bash
+OPENAI_API_KEY=sk-...
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+STOCK_AGENT_API_KEY=replace-with-a-long-random-secret
+```
+
+Use `${VAR_NAME}` syntax, not `{VAR_NAME}`.
+
 
 ### API Endpoints
 
