@@ -12,7 +12,12 @@ The agent:
 - Uses OpenAI to generate a concise research summary
 - Optionally sends alerts to Discord using a Discord webhook
 
-This project is intended for research and alerting only. It is not financial advice and should not place trades automatically.
+This project is intended for research and alerting only. It is not financial
+advice and should not place trades automatically.
+
+Disclosure: parts of this codebase and documentation were generated or
+AI-assisted. Review and test the code before relying on it for alerts,
+automation, or deployment.
 
 ---
 
