@@ -58,9 +58,13 @@ class RunRequest(BaseModel):
         default=False,
         description="Send per-stock review messages to Discord from inside the container.",
     )
+    send_summary: bool | None = Field(
+        default=None,
+        description="Send the full-watchlist Discord summary for this run.",
+    )
     send_daily_summary: bool | None = Field(
         default=None,
-        description="Override config.yaml alerts.send_daily_summary.",
+        description="Deprecated alias for send_summary.",
     )
 
 
@@ -119,6 +123,7 @@ def run_reviews(request: RunRequest | None = Body(default=None)):
             config=config,
             include_summary=request.include_summary,
             send_discord=request.send_discord,
+            send_summary=request.send_summary,
             send_daily_summary=request.send_daily_summary,
         )
     except Exception as e:

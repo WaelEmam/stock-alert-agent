@@ -220,7 +220,7 @@ Discord alert settings:
 ```yaml
 alerts:
   send_per_stock_review: true
-  send_daily_summary: true
+  send_summary: true
   send_only_if_triggered: false
   min_alert_score: 5
 ```
@@ -233,22 +233,25 @@ triggers.
 - `send_per_stock_review`: when `true`, allows one full Discord review message
   for each ticker in the watchlist. If a stock has `alert_thresholds`, the
   message is sent only when a threshold is breached.
-- `send_daily_summary`: when `true`, sends one summary message after all stocks
-  have been reviewed.
+- `send_summary`: when `true`, sends one full-watchlist summary message after
+  all stocks have been reviewed. The API can override this per run.
 - `send_only_if_triggered`: legacy filter for per-stock messages when
   `send_per_stock_review` is `false`.
 - `min_alert_score`: minimum absolute score used by the triggered-message
   filter.
 
+Older examples may use `send_daily_summary`; it is still supported as a
+backward-compatible alias for `send_summary`.
+
 With the default settings, each stock is reviewed. Discord messages are sent
 only when the stock's alert rules say it should send. If a stock has
 `alert_thresholds`, at least one threshold must be breached before a Discord
-message is sent for that stock. The daily summary is still controlled by
-`send_daily_summary`.
+message is sent for that stock. The full-watchlist summary is still controlled
+by `send_summary`.
 
 Important difference between run modes:
 
-- `python main.py` uses `send_per_stock_review` and `send_daily_summary` from
+- `python main.py` uses `send_per_stock_review` and `send_summary` from
   `config.yaml`. Per-stock Discord messages still respect any configured
   `alert_thresholds`.
 - FastAPI endpoints do not send Discord messages by default. For API calls, set
@@ -272,7 +275,7 @@ The agent will:
 - generate an OpenAI summary if `OPENAI_API_KEY` is configured
 - send a Discord review message per stock when `send_per_stock_review` is
   enabled and that stock's alert logic says to send
-- send a daily summary if enabled in `config.yaml`
+- send a full-watchlist summary if enabled in `config.yaml`
 
 ## Enabling Discord Messages
 
@@ -298,7 +301,7 @@ For the script runner, Discord behavior comes from `config.yaml`:
 ```yaml
 alerts:
   send_per_stock_review: true
-  send_daily_summary: true
+  send_summary: true
   send_only_if_triggered: false
   min_alert_score: 5
 ```
@@ -306,8 +309,8 @@ alerts:
 With this setup, `python main.py` reviews every stock. For stocks with
 `alert_thresholds`, it sends a Discord review only when at least one threshold
 is breached. For stocks without `alert_thresholds`, it uses the normal
-score/signal alert behavior. It then sends a daily summary if
-`send_daily_summary` is `true`.
+score/signal alert behavior. It then sends a full-watchlist summary if
+`send_summary` is `true`.
 
 To stop routine per-stock Discord messages and keep only triggered alerts for
 stocks without `alert_thresholds`, use:
@@ -319,11 +322,11 @@ alerts:
   min_alert_score: 5
 ```
 
-To disable the daily summary:
+To disable the full-watchlist summary:
 
 ```yaml
 alerts:
-  send_daily_summary: false
+  send_summary: false
 ```
 
 ### 3. Enable Discord For FastAPI Or Docker
@@ -417,7 +420,8 @@ Global alert settings. These are different from per-stock `alert_thresholds`.
 | Field | Example | Description |
 | --- | --- | --- |
 | `send_per_stock_review` | `true` | Allows one Discord review per stock. If a stock has `alert_thresholds`, a message is sent only when a threshold is breached. |
-| `send_daily_summary` | `false` | Sends a summary message after a full `/run`. For scheduled jobs, `false` avoids repeated summary spam. |
+| `send_summary` | `false` | Sends a full-watchlist summary message after a full run. For scheduled jobs, `false` avoids repeated summary spam. |
+| `send_daily_summary` | `false` | Backward-compatible alias for `send_summary`. Prefer `send_summary` for new configs. |
 | `send_only_if_triggered` | `true` | Legacy score/signal filter used for stocks that do not have `alert_thresholds`. |
 | `min_alert_score` | `5` | Minimum absolute score for the legacy triggered-alert filter. |
 
@@ -426,7 +430,7 @@ Example:
 ```yaml
 alerts:
   send_per_stock_review: true
-  send_daily_summary: false
+  send_summary: false
   send_only_if_triggered: true
   min_alert_score: 5
 ```
@@ -1004,11 +1008,29 @@ This file must exist on the host before starting the stack because it is mounted
 into the scheduler container.
 
 Example: run the full watchlist every 10 minutes, send Discord only when stock
-alert logic says to send, skip OpenAI summaries, and skip daily summaries:
+alert logic says to send, skip OpenAI summaries, and skip the full-watchlist
+summary:
 
 ```cron
-*/10 * * * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":false,"send_discord":true,"send_daily_summary":false}'
+*/10 * * * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":false,"send_discord":true,"send_summary":false}'
 ```
+
+Add one of these extra cron lines if you want a scheduled Discord summary:
+
+```cron
+# Daily summary at 8 AM
+0 8 * * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
+
+# Weekly summary every Monday at 8 AM
+0 8 * * 1 curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
+
+# Monthly summary on the first day of each month at 8 AM
+0 8 1 * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
+```
+
+In API requests, `send_summary` controls whether this run sends the
+full-watchlist Discord summary. The older `send_daily_summary` field still
+works, but `send_summary` is clearer for daily, weekly, or monthly schedules.
 
 Inside Docker Compose, the scheduler calls the API service by container/service
 name:
@@ -1232,36 +1254,17 @@ curl -X POST http://localhost:8000/run \
   -d '{
     "include_summary": true,
     "send_discord": true,
-    "send_daily_summary": true
+    "send_summary": true
   }'
 ```
+
+`send_summary` controls whether this `/run` call sends the full-watchlist
+Discord summary. Use it for daily, weekly, or monthly scheduled summary jobs.
+The older `send_daily_summary` request field is still accepted as an alias.
 
 For stocks with `alert_thresholds`, Discord sends only when at least one
 threshold is breached. Stocks without `alert_thresholds` use the normal
 score/signal alert behavior.
-
-### Docker Image Versioning Strategy
-
-Use immutable version tags for deployed compose files, and reserve `latest` for
-manual testing or quick local pulls.
-
-Recommended tagging pattern:
-
-```text
-waelemam/stock-alert-agent:1.1.1
-waelemam/stock-alert-agent:1.1
-waelemam/stock-alert-agent:1
-waelemam/stock-alert-agent:latest
-```
-
-For production or home-server deployments, pin the full version:
-
-```yaml
-image: waelemam/stock-alert-agent:1.1.1
-```
-
-This makes container restarts predictable. Move to a newer version by editing
-the compose file, pulling the image, and recreating the container.
 
 ### Docker Files
 

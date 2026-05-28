@@ -753,6 +753,7 @@ def run_agent(
     config=None,
     include_summary: bool = True,
     send_discord: bool | None = None,
+    send_summary: bool | None = None,
     send_daily_summary: bool | None = None,
 ):
     config = config or load_config()
@@ -766,8 +767,14 @@ def run_agent(
     if send_discord is None:
         send_discord = send_per_stock_review
 
-    if send_daily_summary is None:
-        send_daily_summary = alerts.get("send_daily_summary", True)
+    if send_summary is None:
+        send_summary = send_daily_summary
+
+    if send_summary is None:
+        send_summary = alerts.get(
+            "send_summary",
+            alerts.get("send_daily_summary", True),
+        )
 
     results = []
 
@@ -809,10 +816,10 @@ def run_agent(
         "error_count": len([result for result in results if result["status"] == "error"]),
     }
 
-    daily_summary_sent = False
-    if send_discord and send_daily_summary:
+    summary_sent = False
+    if send_discord and send_summary:
         summary_lines = [
-            f"**{agent_name} Daily Summary**",
+            f"**{agent_name} Summary**",
             f"Run time: `{now}`",
             "",
         ]
@@ -831,12 +838,13 @@ def run_agent(
         summary_lines.append("_Not financial advice. Alerts are for research review only._")
 
         send_discord_message("\n".join(summary_lines))
-        daily_summary_sent = True
+        summary_sent = True
 
     return to_json_safe({
         "status": "ok" if summary["error_count"] == 0 else "partial",
         "summary": summary,
-        "daily_summary_sent": daily_summary_sent,
+        "summary_sent": summary_sent,
+        "daily_summary_sent": summary_sent,
         "results": results,
     })
 

@@ -5,7 +5,7 @@ agent:
 
 alerts:
   send_per_stock_review: true
-  send_daily_summary: true
+  send_summary: true
   send_only_if_triggered: false
   min_alert_score: 5
 
