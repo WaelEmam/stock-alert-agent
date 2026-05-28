@@ -25,8 +25,10 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
-def load_config(path="config.yaml"):
-    with open(path, "r") as f:
+def load_config(path=None):
+    config_path = path or os.getenv("CONFIG_PATH", "config.yaml")
+
+    with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
 
@@ -453,7 +455,7 @@ def send_discord_message(content):
         time.sleep(0.4)
 
 
-def format_stock_alert(stock_data, rule_result, research_summary):
+def format_stock_alert(stock_data, rule_result, research_summary, threshold_result=None):
     ticker = stock_data["ticker"]
     price = stock_data["current_price"]
     daily = stock_data["daily_change_pct"]
@@ -465,6 +467,15 @@ def format_stock_alert(stock_data, rule_result, research_summary):
 
     triggered_text = "\n".join([f"- {x}" for x in triggered]) if triggered else "- No major rules triggered"
     warnings_text = "\n".join([f"- {x}" for x in warnings]) if warnings else "- None"
+
+    threshold_text = "- No per-stock thresholds configured"
+    if threshold_result and threshold_result["configured"]:
+        if threshold_result["breaches"]:
+            threshold_text = "\n".join(
+                [f"- {breach['message']}" for breach in threshold_result["breaches"]]
+            )
+        else:
+            threshold_text = "- Thresholds configured, but none breached"
 
     news_text = ""
     for item in stock_data.get("news", [])[:3]:
@@ -485,6 +496,9 @@ Score: `{rule_result['score']}`
 
 **Triggered Rules**
 {triggered_text}
+
+**Alert Thresholds**
+{threshold_text}
 
 **Warnings**
 {warnings_text}
@@ -542,7 +556,134 @@ def find_watch_item(config, ticker: str):
     }
 
 
-def should_send_stock_alert(config, rule_result):
+def add_threshold_breach(breaches, key, label, current, threshold, direction):
+    if current is None or threshold is None:
+        return
+
+    if direction == "below" and current < threshold:
+        breaches.append({
+            "key": key,
+            "label": label,
+            "direction": direction,
+            "current": current,
+            "threshold": threshold,
+            "message": f"{label} is below threshold: {current:.2f} < {threshold:.2f}",
+        })
+
+    if direction == "above" and current > threshold:
+        breaches.append({
+            "key": key,
+            "label": label,
+            "direction": direction,
+            "current": current,
+            "threshold": threshold,
+            "message": f"{label} is above threshold: {current:.2f} > {threshold:.2f}",
+        })
+
+
+def evaluate_alert_thresholds(stock_data, rule_result, watch_item):
+    thresholds = watch_item.get("alert_thresholds") or {}
+    breaches = []
+
+    if not thresholds:
+        return {
+            "configured": False,
+            "breached": False,
+            "breaches": breaches,
+        }
+
+    add_threshold_breach(
+        breaches,
+        "price_below",
+        "Current price",
+        stock_data.get("current_price"),
+        thresholds.get("price_below"),
+        "below",
+    )
+    add_threshold_breach(
+        breaches,
+        "price_above",
+        "Current price",
+        stock_data.get("current_price"),
+        thresholds.get("price_above"),
+        "above",
+    )
+    add_threshold_breach(
+        breaches,
+        "daily_change_below_pct",
+        "Daily change %",
+        stock_data.get("daily_change_pct"),
+        thresholds.get("daily_change_below_pct"),
+        "below",
+    )
+    add_threshold_breach(
+        breaches,
+        "daily_change_above_pct",
+        "Daily change %",
+        stock_data.get("daily_change_pct"),
+        thresholds.get("daily_change_above_pct"),
+        "above",
+    )
+    add_threshold_breach(
+        breaches,
+        "rsi_below",
+        "RSI",
+        stock_data.get("rsi"),
+        thresholds.get("rsi_below"),
+        "below",
+    )
+    add_threshold_breach(
+        breaches,
+        "rsi_above",
+        "RSI",
+        stock_data.get("rsi"),
+        thresholds.get("rsi_above"),
+        "above",
+    )
+    add_threshold_breach(
+        breaches,
+        "gain_loss_below_pct",
+        "Gain/loss %",
+        rule_result.get("gain_loss_pct"),
+        thresholds.get("gain_loss_below_pct"),
+        "below",
+    )
+    add_threshold_breach(
+        breaches,
+        "gain_loss_above_pct",
+        "Gain/loss %",
+        rule_result.get("gain_loss_pct"),
+        thresholds.get("gain_loss_above_pct"),
+        "above",
+    )
+    add_threshold_breach(
+        breaches,
+        "score_below",
+        "Rule score",
+        rule_result.get("score"),
+        thresholds.get("score_below"),
+        "below",
+    )
+    add_threshold_breach(
+        breaches,
+        "score_above",
+        "Rule score",
+        rule_result.get("score"),
+        thresholds.get("score_above"),
+        "above",
+    )
+
+    return {
+        "configured": True,
+        "breached": bool(breaches),
+        "breaches": breaches,
+    }
+
+
+def should_send_stock_alert(config, rule_result, threshold_result=None):
+    if threshold_result and threshold_result["configured"]:
+        return threshold_result["breached"]
+
     alerts = config.get("alerts", {})
     send_only_if_triggered = alerts.get("send_only_if_triggered", False)
     min_alert_score = alerts.get("min_alert_score", 5)
@@ -568,6 +709,7 @@ def analyze_stock(
 
     stock_data = fetch_stock_data(ticker, config)
     rule_result = evaluate_rules(stock_data, watch_item, config)
+    threshold_result = evaluate_alert_thresholds(stock_data, rule_result, watch_item)
 
     if include_summary:
         research_summary = generate_research_summary(
@@ -579,9 +721,14 @@ def analyze_stock(
     else:
         research_summary = "OpenAI summary skipped by request."
 
-    message = format_stock_alert(stock_data, rule_result, research_summary)
+    message = format_stock_alert(
+        stock_data,
+        rule_result,
+        research_summary,
+        threshold_result,
+    )
 
-    should_alert = should_send_stock_alert(config, rule_result)
+    should_alert = should_send_stock_alert(config, rule_result, threshold_result)
     discord_sent = False
 
     if send_discord and should_alert:
@@ -594,6 +741,7 @@ def analyze_stock(
         "watch_item": watch_item,
         "stock_data": stock_data,
         "rule_result": rule_result,
+        "threshold_result": threshold_result,
         "research_summary": research_summary,
         "discord_message": message,
         "should_alert": should_alert,

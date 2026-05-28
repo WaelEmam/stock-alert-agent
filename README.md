@@ -1,5 +1,4 @@
 # Stock Alert Agent
-## AI Generated most of the code
 
 A lightweight stock monitoring and research alert agent that can run as a
 script or as a Dockerized FastAPI service.
@@ -204,8 +203,14 @@ alerts:
   min_alert_score: 5
 ```
 
-- `send_per_stock_review`: when `true`, sends one full Discord review message
-  for each ticker in the watchlist.
+This global `alerts` section is different from per-stock `alert_thresholds`.
+Use `alerts` for app-wide Discord behavior. Use `alert_thresholds` inside a
+specific watchlist item for stock-specific price, RSI, gain/loss, or score
+triggers.
+
+- `send_per_stock_review`: when `true`, allows one full Discord review message
+  for each ticker in the watchlist. If a stock has `alert_thresholds`, the
+  message is sent only when a threshold is breached.
 - `send_daily_summary`: when `true`, sends one summary message after all stocks
   have been reviewed.
 - `send_only_if_triggered`: legacy filter for per-stock messages when
@@ -213,14 +218,17 @@ alerts:
 - `min_alert_score`: minimum absolute score used by the triggered-message
   filter.
 
-With the default settings, two watchlist stocks produce three Discord messages:
-one review for each stock, then one daily summary.
+With the default settings, each stock is reviewed. Discord messages are sent
+only when the stock's alert rules say it should send. If a stock has
+`alert_thresholds`, at least one threshold must be breached before a Discord
+message is sent for that stock. The daily summary is still controlled by
+`send_daily_summary`.
 
 Important difference between run modes:
 
 - `python main.py` uses `send_per_stock_review` and `send_daily_summary` from
-  `config.yaml`, so it sends Discord messages by default when
-  `DISCORD_WEBHOOK_URL` is set.
+  `config.yaml`. Per-stock Discord messages still respect any configured
+  `alert_thresholds`.
 - FastAPI endpoints do not send Discord messages by default. For API calls, set
   `send_discord` to `true` in the request body.
 
@@ -240,8 +248,8 @@ The agent will:
 - fetch stock data using `yfinance`
 - evaluate the technical, risk, and fundamental rules
 - generate an OpenAI summary if `OPENAI_API_KEY` is configured
-- send one Discord review message per stock when `send_per_stock_review` is
-  enabled
+- send a Discord review message per stock when `send_per_stock_review` is
+  enabled and that stock's alert logic says to send
 - send a daily summary if enabled in `config.yaml`
 
 ## Enabling Discord Messages
@@ -273,10 +281,14 @@ alerts:
   min_alert_score: 5
 ```
 
-With this setup, `python main.py` sends one full Discord review per stock and
-then sends a daily summary.
+With this setup, `python main.py` reviews every stock. For stocks with
+`alert_thresholds`, it sends a Discord review only when at least one threshold
+is breached. For stocks without `alert_thresholds`, it uses the normal
+score/signal alert behavior. It then sends a daily summary if
+`send_daily_summary` is `true`.
 
-To stop per-stock Discord messages but keep only triggered alerts, use:
+To stop routine per-stock Discord messages and keep only triggered alerts for
+stocks without `alert_thresholds`, use:
 
 ```yaml
 alerts:
@@ -483,6 +495,99 @@ watchlist:
     strategy: "watch_only"
 ```
 
+### `alert_thresholds`
+
+`alert_thresholds` are optional per-stock Discord alert triggers. They let you
+say, "only alert me for this stock if it goes below this price, above this
+price, above this RSI, below this gain/loss percentage," and so on.
+
+Example:
+
+```yaml
+watchlist:
+  - ticker: "SNOW"
+    name: "Snowflake"
+    position_pct: 25
+    cost_basis: 125
+    strategy: "exit_review"
+    alert_thresholds:
+      price_below: 160
+      price_above: 190
+      daily_change_below_pct: -5
+      daily_change_above_pct: 5
+      rsi_below: 30
+      rsi_above: 80
+      gain_loss_below_pct: -15
+      gain_loss_above_pct: 40
+      score_below: -5
+      score_above: 7
+```
+
+Supported threshold keys:
+
+- `price_below`: alert if current price is below this value.
+- `price_above`: alert if current price is above this value.
+- `daily_change_below_pct`: alert if daily percentage change is below this
+  value.
+- `daily_change_above_pct`: alert if daily percentage change is above this
+  value.
+- `rsi_below`: alert if RSI is below this value.
+- `rsi_above`: alert if RSI is above this value.
+- `gain_loss_below_pct`: alert if gain/loss from `cost_basis` is below this
+  percentage.
+- `gain_loss_above_pct`: alert if gain/loss from `cost_basis` is above this
+  percentage.
+- `score_below`: alert if the rule score is below this value.
+- `score_above`: alert if the rule score is above this value.
+
+When `alert_thresholds` are configured for a stock, Discord alerts for that
+stock are sent only when at least one threshold is breached. The API still
+returns JSON either way.
+
+Examples:
+
+- If `price_below: 160` and the current price is `155`, the threshold is
+  breached and Discord can send.
+- If `price_below: 160` and the current price is `170`, the threshold is not
+  breached and no Discord message is sent for that stock.
+- If `rsi_above: 80` and RSI is `85`, the threshold is breached.
+- If `gain_loss_below_pct: -15` and the position is down `20%` from
+  `cost_basis`, the threshold is breached.
+
+If a stock does not have `alert_thresholds`, the agent falls back to the normal
+score/signal alert behavior controlled by:
+
+```yaml
+alerts:
+  send_only_if_triggered: false
+  min_alert_score: 5
+```
+
+The API response includes `threshold_result`:
+
+```json
+{
+  "threshold_result": {
+    "configured": true,
+    "breached": true,
+    "breaches": [
+      {
+        "key": "rsi_above",
+        "label": "RSI",
+        "direction": "above",
+        "current": 85.4,
+        "threshold": 80,
+        "message": "RSI is above threshold: 85.40 > 80.00"
+      }
+    ]
+  }
+}
+```
+
+The Discord message also includes an **Alert Thresholds** section showing which
+thresholds were breached, or that thresholds were configured but none were
+breached.
+
 ## Running From A Fresh Terminal
 
 Each time you open a new terminal, activate the virtual environment before
@@ -517,6 +622,9 @@ Docker container
 - Optionally generates OpenAI summaries
 - Returns JSON responses
 - Optionally sends Discord alerts from inside the container
+
+By default the app reads `config.yaml` from the current working directory. In
+Docker, set `CONFIG_PATH` to point at the mounted config file.
 
 Discord sending is off by default for API calls. Set `send_discord` to `true`
 in the request body when you want the container to send Discord messages.
@@ -579,7 +687,8 @@ The compose file:
 
 - reads secrets from `.env`
 - exposes port `8000`
-- mounts local `config.yaml` into the container as read-only
+- mounts the local project directory at `/config` as read-only
+- sets `CONFIG_PATH=/config/config.yaml`
 
 Stop the service:
 
@@ -603,10 +712,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+      - CONFIG_PATH=/config/config.yaml
     ports:
       - "8898:8000"
     volumes:
-      - /containers/stock-alert-agent/config.yaml:/app/config.yaml:ro
+      - /containers/stock-alert-agent:/config:ro
     restart: unless-stopped
 ```
 
@@ -622,18 +732,24 @@ Create the host config file:
 nano /containers/stock-alert-agent/config.yaml
 ```
 
-Paste your `config.yaml` content into that file. The left side of the volume
-mount must be a real file on the host:
+Paste your `config.yaml` content into that file. The volume mount points the
+host config folder into the container:
 
 ```text
-/containers/stock-alert-agent/config.yaml
+/containers/stock-alert-agent
 ```
 
-The right side is the file path inside the container:
+The app reads the file from:
 
 ```text
-/app/config.yaml
+/config/config.yaml
 ```
+
+This directory-mount approach is recommended over mounting a single file. Some
+editors save files by replacing the file inode, and single-file Docker bind
+mounts can keep pointing at the old file until the container is recreated.
+Mounting the directory avoids that problem, so changes to `config.yaml` are
+picked up on the next `/run` or `/analyze/{ticker}` request.
 
 Start the stack:
 
@@ -668,6 +784,7 @@ environment:
   - OPENAI_API_KEY=${OPENAI_API_KEY}
   - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
   - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+  - CONFIG_PATH=/config/config.yaml
 ```
 
 then define those variables in the same environment where Compose runs, or put
@@ -681,6 +798,66 @@ STOCK_AGENT_API_KEY=replace-with-a-long-random-secret
 
 Use `${VAR_NAME}` syntax, not `{VAR_NAME}`.
 
+#### Config Changes Not Appearing In The Container
+
+If edits to `config.yaml` only appear after restarting the container, you are
+probably using a single-file bind mount like this:
+
+```yaml
+volumes:
+  - /containers/stock-alert-agent/config.yaml:/app/config.yaml:ro
+```
+
+Use a directory bind mount instead:
+
+```yaml
+environment:
+  - CONFIG_PATH=/config/config.yaml
+volumes:
+  - /containers/stock-alert-agent:/config:ro
+```
+
+Then verify the container sees the current config:
+
+```bash
+docker exec stock-alert-agent cat /config/config.yaml
+```
+
+The app reloads the config file on each API request, so no restart is needed
+after threshold edits when the directory mount is used.
+
+#### Fixing Config Mount Errors
+
+If you see an error like:
+
+```text
+not a directory: Are you trying to mount a directory onto a file (or vice-versa)?
+```
+
+Docker is telling you that the host path and container path do not have the same
+type. With the recommended directory mount, the host path should be a directory:
+
+```bash
+file /containers/stock-alert-agent
+ls -la /containers/stock-alert-agent/config.yaml
+```
+
+You want `/containers/stock-alert-agent` to be a directory and
+`/containers/stock-alert-agent/config.yaml` to be a file.
+
+If Docker accidentally created `config.yaml` as a directory, remove it and
+recreate it as a file:
+
+```bash
+rm -r /containers/stock-alert-agent/config.yaml
+nano /containers/stock-alert-agent/config.yaml
+```
+
+Then redeploy:
+
+```bash
+docker compose up -d
+```
 
 ### API Endpoints
 
@@ -718,7 +895,8 @@ curl http://localhost:8000/watchlist \
 #### `POST /analyze/{ticker}`
 
 Analyzes one ticker and returns JSON. This does not need the ticker to already
-exist in `config.yaml`.
+exist in `config.yaml`. The response includes `threshold_result` when
+per-stock `alert_thresholds` are configured.
 
 ```bash
 curl -X POST http://localhost:8000/analyze/SNOW \
@@ -745,9 +923,14 @@ curl -X POST http://localhost:8000/analyze/SNOW \
   }'
 ```
 
+If `"send_discord": true`, Discord sends only when the stock's alert logic says
+to send. For stocks with `alert_thresholds`, that means at least one threshold
+must be breached.
+
 #### `POST /run`
 
-Runs the full watchlist from `config.yaml`.
+Runs the full watchlist from `config.yaml`. Each result includes
+`threshold_result` when that stock has per-stock `alert_thresholds`.
 
 ```bash
 curl -X POST http://localhost:8000/run \
@@ -771,6 +954,10 @@ curl -X POST http://localhost:8000/run \
     "send_daily_summary": true
   }'
 ```
+
+For stocks with `alert_thresholds`, Discord sends only when at least one
+threshold is breached. Stocks without `alert_thresholds` use the normal
+score/signal alert behavior.
 
 ### Docker Files
 

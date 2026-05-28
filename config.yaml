@@ -25,12 +25,23 @@ watchlist:
     position_pct: 25
     cost_basis: 125
     strategy: "exit_review"
+    alert_thresholds:
+      price_below: 160
+      price_above: 190
+      rsi_above: 80
+      gain_loss_below_pct: -15
+      gain_loss_above_pct: 40
 
   - ticker: "RY.TO"
     name: "Royal Bank of Canada"
     position_pct: 75
     cost_basis: 140
     strategy: "long_term_growth"
+    alert_thresholds:
+      price_below: 240
+      price_above: 275
+      rsi_above: 75
+      gain_loss_below_pct: -10
 rules:
   technical:
     rsi_overbought: 70
