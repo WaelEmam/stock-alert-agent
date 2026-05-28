@@ -667,13 +667,17 @@ http://localhost:8000/docs
 
 ### Run With Docker Compose
 
-Use this when you are running from the project folder and want Docker Compose to
-build the image locally.
+The included `docker-compose.yml` uses the published Docker Hub image and starts
+two containers:
 
-Build and start the service:
+- `stock-alert-agent`: the FastAPI service
+- `stock-alert-scheduler`: an Alpine cron sidecar that can call the API on a
+  schedule
+
+Start the service:
 
 ```bash
-docker compose up --build
+docker compose up -d
 ```
 
 The API will be available at:
@@ -692,8 +696,9 @@ The compose file:
 
 - reads secrets from `.env`
 - exposes port `8000`
-- mounts the local project directory at `/config` as read-only
+- mounts `/containers/stock-alert-agent` at `/config` as read-only
 - sets `CONFIG_PATH=/config/config.yaml`
+- mounts `/containers/stock-alert-agent/crontab` into the scheduler container
 
 Stop the service:
 
@@ -711,7 +716,7 @@ Example `docker-compose.yml`:
 ```yaml
 services:
   stock-alert-agent:
-    image: waelemam/stock-alert-agent:latest
+    image: waelemam/stock-alert-agent:1.1.1
     container_name: stock-alert-agent
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -722,6 +727,19 @@ services:
       - "8898:8000"
     volumes:
       - /containers/stock-alert-agent:/config:ro
+    restart: unless-stopped
+
+  stock-alert-scheduler:
+    image: alpine:latest
+    container_name: stock-alert-scheduler
+    depends_on:
+      - stock-alert-agent
+    environment:
+      - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+    volumes:
+      - /containers/stock-alert-agent/crontab:/etc/crontabs/root:ro
+    command: >
+      sh -c "apk add --no-cache curl && crond -f -l 8"
     restart: unless-stopped
 ```
 
@@ -756,6 +774,43 @@ mounts can keep pointing at the old file until the container is recreated.
 Mounting the directory avoids that problem, so changes to `config.yaml` are
 picked up on the next `/run` or `/analyze/{ticker}` request.
 
+Create the scheduler crontab file:
+
+```bash
+nano /containers/stock-alert-agent/crontab
+```
+
+This file must exist on the host before starting the stack because it is mounted
+into the scheduler container.
+
+Example: run the full watchlist every 10 minutes, send Discord only when stock
+alert logic says to send, skip OpenAI summaries, and skip daily summaries:
+
+```cron
+*/10 * * * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":false,"send_discord":true,"send_daily_summary":false}'
+```
+
+Inside Docker Compose, the scheduler calls the API service by container/service
+name:
+
+```text
+http://stock-alert-agent:8000
+```
+
+Do not use `localhost:8000` inside the scheduler container. In that container,
+`localhost` means the scheduler container itself.
+
+The `*/10 * * * *` cron expression runs at minute `0`, `10`, `20`, `30`, `40`,
+and `50` of every hour. It is based on the container clock, not on when the
+container started.
+
+The scheduler uses `alpine:latest` and installs `curl` when it starts:
+
+```yaml
+command: >
+  sh -c "apk add --no-cache curl && crond -f -l 8"
+```
+
 Start the stack:
 
 ```bash
@@ -766,6 +821,7 @@ Check logs:
 
 ```bash
 docker compose logs -f stock-alert-agent
+docker compose logs -f stock-alert-scheduler
 ```
 
 Open the API:

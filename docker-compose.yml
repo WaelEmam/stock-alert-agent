@@ -1,13 +1,27 @@
 services:
   stock-alert-agent:
-    build: .
+    image: waelemam/stock-alert-agent:1.1.1
     container_name: stock-alert-agent
-    env_file:
-      - .env
     environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
       - CONFIG_PATH=/config/config.yaml
     ports:
       - "8000:8000"
     volumes:
-      - ./:/config:ro
+      - /containers/stock-alert-agent:/config:ro
+    restart: unless-stopped
+
+  stock-alert-scheduler:
+    image: alpine:latest
+    container_name: stock-alert-scheduler
+    depends_on:
+      - stock-alert-agent
+    environment:
+      - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+    volumes:
+      - /containers/stock-alert-agent/crontab:/etc/crontabs/root:ro
+    command: >
+      sh -c "apk add --no-cache curl && crond -f -l 8"
     restart: unless-stopped
