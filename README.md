@@ -19,6 +19,23 @@ Disclosure: parts of this codebase and documentation were generated or
 AI-assisted. Review and test the code before relying on it for alerts,
 automation, or deployment.
 
+## Table Of Contents
+
+- [How the Agent Works](#how-the-agent-works)
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Enabling Discord Messages](#enabling-discord-messages)
+- [API Key Authentication](#api-key-authentication)
+- [`config.yaml` Reference](#configyaml-reference)
+- [Common Setup Issues](#common-setup-issues)
+- [Watchlist Fields](#watchlist-fields)
+- [Running From A Fresh Terminal](#running-from-a-fresh-terminal)
+- [FastAPI Service](#fastapi-service)
+- [Docker Compose Deployment](#run-with-docker-compose)
+- [Deploy From Docker Hub](#deploy-from-docker-hub-with-docker-compose)
+- [API Endpoints](#api-endpoints)
+- [Docker Files](#docker-files)
+
 ---
 
 ## How the Agent Works
@@ -975,6 +992,8 @@ mounts can keep pointing at the old file until the container is recreated.
 Mounting the directory avoids that problem, so changes to `config.yaml` are
 picked up on the next `/run` or `/analyze/{ticker}` request.
 
+#### Scheduler Sidecar Container
+
 Create the scheduler crontab file:
 
 ```bash
@@ -1220,6 +1239,29 @@ curl -X POST http://localhost:8000/run \
 For stocks with `alert_thresholds`, Discord sends only when at least one
 threshold is breached. Stocks without `alert_thresholds` use the normal
 score/signal alert behavior.
+
+### Docker Image Versioning Strategy
+
+Use immutable version tags for deployed compose files, and reserve `latest` for
+manual testing or quick local pulls.
+
+Recommended tagging pattern:
+
+```text
+waelemam/stock-alert-agent:1.1.1
+waelemam/stock-alert-agent:1.1
+waelemam/stock-alert-agent:1
+waelemam/stock-alert-agent:latest
+```
+
+For production or home-server deployments, pin the full version:
+
+```yaml
+image: waelemam/stock-alert-agent:1.1.1
+```
+
+This makes container restarts predictable. Move to a newer version by editing
+the compose file, pulling the image, and recreating the container.
 
 ### Docker Files
 
