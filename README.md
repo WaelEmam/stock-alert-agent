@@ -371,6 +371,207 @@ python main.py
 To run it automatically every day, use a scheduler such as cron, launchd, GitHub
 Actions, or another automation tool.
 
+## `config.yaml` Reference
+
+This file controls the agent, data source, alert behavior, watchlist, and rule
+thresholds.
+
+### `agent`
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `name` | `"Home Stock Alert Agent"` | Display name used in summaries and error messages. |
+| `model` | `"gpt-4.1-mini"` | OpenAI model used when summaries are enabled and `OPENAI_API_KEY` is set. |
+| `timezone` | `"America/Toronto"` | Intended timezone for the agent. Current timestamps use the container or host runtime clock. |
+
+Example:
+
+```yaml
+agent:
+  name: "Home Stock Alert Agent"
+  model: "gpt-4.1-mini"
+  timezone: "America/Toronto"
+```
+
+### `alerts`
+
+Global alert settings. These are different from per-stock `alert_thresholds`.
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `send_per_stock_review` | `true` | Allows one Discord review per stock. If a stock has `alert_thresholds`, a message is sent only when a threshold is breached. |
+| `send_daily_summary` | `false` | Sends a summary message after a full `/run`. For scheduled jobs, `false` avoids repeated summary spam. |
+| `send_only_if_triggered` | `true` | Legacy score/signal filter used for stocks that do not have `alert_thresholds`. |
+| `min_alert_score` | `5` | Minimum absolute score for the legacy triggered-alert filter. |
+
+Example:
+
+```yaml
+alerts:
+  send_per_stock_review: true
+  send_daily_summary: false
+  send_only_if_triggered: true
+  min_alert_score: 5
+```
+
+### `data`
+
+Yahoo Finance and yfinance settings.
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `price_provider` | `"yahoo"` | Current supported provider. The app uses Yahoo Finance through `yfinance`. |
+| `yfinance.retries` | `2` | yfinance network retry count for transient failures. |
+| `yfinance.debug` | `false` | Enables verbose yfinance logging when troubleshooting. |
+| `yfinance.proxy` | `null` | Optional proxy URL. Leave blank unless your network requires it. |
+
+Example:
+
+```yaml
+data:
+  price_provider: "yahoo"
+  yfinance:
+    retries: 2
+    debug: false
+    proxy:
+```
+
+### `portfolio`
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `max_single_position_pct` | `15` | Portfolio-level reference value. The current rule engine uses `rules.risk.max_position_pct` for scoring. |
+
+Example:
+
+```yaml
+portfolio:
+  max_single_position_pct: 15
+```
+
+### `watchlist`
+
+Each item in `watchlist` describes one stock to monitor.
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `ticker` | `"SNOW"` | Ticker symbol passed to Yahoo Finance. Canadian tickers can use Yahoo format such as `"RY.TO"`. |
+| `name` | `"Snowflake"` | Human-readable company name. Used for context in summaries. |
+| `position_pct` | `25` | Approximate percent of your portfolio in this stock. Used by position-size risk rules. |
+| `cost_basis` | `125` | Your average purchase price per share. Used for gain/loss, stop-loss, take-profit, and gain/loss thresholds. |
+| `strategy` | `"exit_review"` | Your reason for watching or holding the stock. Used as context in OpenAI summaries. |
+| `alert_thresholds` | See below | Optional stock-specific alert triggers. If present, Discord sends only when at least one threshold is breached. |
+
+Example:
+
+```yaml
+watchlist:
+  - ticker: "SNOW"
+    name: "Snowflake"
+    position_pct: 25
+    cost_basis: 125
+    strategy: "exit_review"
+    alert_thresholds:
+      price_below: 160
+      price_above: 190
+      rsi_above: 80
+```
+
+### `watchlist[].alert_thresholds`
+
+Optional per-stock Discord alert thresholds.
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `price_below` | `160` | Alert if current price is below this value. |
+| `price_above` | `190` | Alert if current price is above this value. |
+| `daily_change_below_pct` | `-5` | Alert if daily percentage change is below this value. |
+| `daily_change_above_pct` | `5` | Alert if daily percentage change is above this value. |
+| `rsi_below` | `30` | Alert if RSI is below this value. |
+| `rsi_above` | `80` | Alert if RSI is above this value. |
+| `gain_loss_below_pct` | `-15` | Alert if gain/loss from `cost_basis` is below this percentage. |
+| `gain_loss_above_pct` | `40` | Alert if gain/loss from `cost_basis` is above this percentage. |
+| `score_below` | `-5` | Alert if the rule score is below this value. |
+| `score_above` | `7` | Alert if the rule score is above this value. |
+
+Example:
+
+```yaml
+alert_thresholds:
+  price_below: 160
+  price_above: 190
+  daily_change_below_pct: -5
+  daily_change_above_pct: 5
+  rsi_below: 30
+  rsi_above: 80
+  gain_loss_below_pct: -15
+  gain_loss_above_pct: 40
+  score_below: -5
+  score_above: 7
+```
+
+When `alert_thresholds` exist for a stock, Discord messages for that stock are
+sent only when at least one threshold is breached. JSON responses are still
+returned either way.
+
+### `rules.technical`
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `rsi_overbought` | `70` | RSI level that subtracts points and marks the stock as overbought. |
+| `rsi_oversold` | `30` | RSI level that adds points and marks the stock as oversold. |
+| `below_200dma_sell_review` | `true` | Present in config for readability. The current code always applies the below-200DMA rule when data exists. |
+| `above_50dma_buy_review` | `true` | Present in config for readability. The current code always applies the above-50DMA rule when data exists. |
+| `above_200dma_buy_review` | `true` | Present in config for readability. The current code always applies the above-200DMA rule when data exists. |
+
+Example:
+
+```yaml
+rules:
+  technical:
+    rsi_overbought: 70
+    rsi_oversold: 30
+    below_200dma_sell_review: true
+    above_50dma_buy_review: true
+    above_200dma_buy_review: true
+```
+
+### `rules.risk`
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `stop_loss_pct` | `-15` | Subtracts points when the position is down this much or more from `cost_basis`. |
+| `take_profit_pct` | `40` | Adds a take-profit review when the position is up this much or more from `cost_basis`. |
+| `max_position_pct` | `15` | Subtracts points when `position_pct` is above this value. |
+
+Example:
+
+```yaml
+rules:
+  risk:
+    stop_loss_pct: -15
+    take_profit_pct: 40
+    max_position_pct: 15
+```
+
+### `rules.scoring`
+
+| Field | Example | Description |
+| --- | --- | --- |
+| `buy_review_threshold` | `7` | Score at or above this value becomes `BUY REVIEW`. |
+| `sell_review_threshold` | `-5` | Score at or below this value becomes `SELL REVIEW`. |
+| `urgent_review_threshold` | `-8` | Score at or below this value becomes `URGENT REVIEW`. |
+
+Example:
+
+```yaml
+rules:
+  scoring:
+    buy_review_threshold: 7
+    sell_review_threshold: -5
+    urgent_review_threshold: -8
+```
+
 ## Common Setup Issues
 
 ### `Missing DISCORD_WEBHOOK_URL in .env` When Sending Discord Messages
