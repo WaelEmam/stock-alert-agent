@@ -6,12 +6,13 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
-      - CONFIG_PATH=/config/config.yaml
+      - CONFIG_DIR=/configs
+      - DEFAULT_CONFIG=rbc.yaml
       - TZ=America/Toronto
     ports:
       - "8000:8000"
     volumes:
-      - /containers/stock-alert-agent:/config:ro
+      - /containers/stock-alert-agent/config:/configs:ro
     restart: unless-stopped
 
   stock-alert-scheduler:

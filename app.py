@@ -2,7 +2,7 @@ import os
 import secrets
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, HTTPException, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -11,6 +11,7 @@ from main import (
     analyze_stock,
     configure_yfinance,
     find_watch_item,
+    list_config_profiles,
     load_config,
     run_agent,
 )
@@ -19,7 +20,7 @@ from main import (
 app = FastAPI(
     title="Stock Alert Agent API",
     description="FastAPI service for running stock reviews and optional Discord alerts.",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 
@@ -42,6 +43,17 @@ def require_api_key(x_api_key: str | None = Depends(api_key_header)):
         )
 
     return True
+
+
+def load_requested_config(config_name: str | None):
+    try:
+        return load_config(config_name=config_name)
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def selected_config_label(config_name: str | None):
+    return config_name or os.getenv("DEFAULT_CONFIG") or os.getenv("CONFIG_PATH") or "config.yaml"
 
 
 @app.get("/", include_in_schema=False)
@@ -107,6 +119,9 @@ def health():
         "status": "ok" if config_loaded else "error",
         "config_loaded": config_loaded,
         "watchlist_count": watchlist_count,
+        "config_dir": os.getenv("CONFIG_DIR"),
+        "default_config": os.getenv("DEFAULT_CONFIG"),
+        "available_configs": list_config_profiles(),
         "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
         "discord_configured": bool(os.getenv("DISCORD_WEBHOOK_URL")),
         "api_auth_configured": bool(os.getenv("STOCK_AGENT_API_KEY")),
@@ -114,43 +129,131 @@ def health():
 
 
 @app.post("/run", dependencies=[Depends(require_api_key)])
-def run_reviews(request: RunRequest | None = Body(default=None)):
+def run_reviews(
+    config_name: str | None = Query(
+        default=None,
+        alias="config",
+        description="Optional config profile name from CONFIG_DIR, such as rbc or wealthsimple.",
+    ),
+    request: RunRequest | None = Body(default=None),
+):
     request = request or RunRequest()
 
     try:
-        config = load_config()
-        return run_agent(
+        config = load_requested_config(config_name)
+        result = run_agent(
             config=config,
             include_summary=request.include_summary,
             send_discord=request.send_discord,
             send_summary=request.send_summary,
             send_daily_summary=request.send_daily_summary,
         )
+        result["config"] = selected_config_label(config_name)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@app.post("/run-all", dependencies=[Depends(require_api_key)])
+def run_all_reviews(request: RunRequest | None = Body(default=None)):
+    request = request or RunRequest()
+    profiles = list_config_profiles()
+
+    if not profiles:
+        raise HTTPException(
+            status_code=400,
+            detail="No config profiles found. Set CONFIG_DIR and add .yaml files.",
+        )
+
+    results = []
+    error_count = 0
+
+    for profile in profiles:
+        try:
+            config = load_requested_config(profile["name"])
+            run_result = run_agent(
+                config=config,
+                include_summary=request.include_summary,
+                send_discord=request.send_discord,
+                send_summary=request.send_summary,
+                send_daily_summary=request.send_daily_summary,
+            )
+            results.append({
+                "config": profile["name"],
+                "file": profile["file"],
+                "status": run_result.get("status", "ok"),
+                "result": run_result,
+            })
+
+            if run_result.get("status") != "ok":
+                error_count += 1
+
+        except Exception as e:
+            error_count += 1
+            results.append({
+                "config": profile["name"],
+                "file": profile["file"],
+                "status": "error",
+                "error": str(e),
+            })
+
+    return {
+        "status": "ok" if error_count == 0 else "partial",
+        "config_count": len(profiles),
+        "error_count": error_count,
+        "results": results,
+    }
+
+
+@app.get("/configs", dependencies=[Depends(require_api_key)])
+def get_configs():
+    return {
+        "config_dir": os.getenv("CONFIG_DIR"),
+        "default_config": os.getenv("DEFAULT_CONFIG"),
+        "configs": list_config_profiles(),
+    }
+
+
 @app.get("/watchlist", dependencies=[Depends(require_api_key)])
-def get_watchlist():
+def get_watchlist(
+    config_name: str | None = Query(
+        default=None,
+        alias="config",
+        description="Optional config profile name from CONFIG_DIR, such as rbc or wealthsimple.",
+    ),
+):
     try:
-        config = load_config()
+        config = load_requested_config(config_name)
         return {
+            "config": selected_config_label(config_name),
             "agent": config.get("agent", {}),
             "alerts": config.get("alerts", {}),
             "data": config.get("data", {}),
             "watchlist": config.get("watchlist", []),
             "rules": config.get("rules", {}),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/analyze/{ticker}", dependencies=[Depends(require_api_key)])
-def analyze_ticker(ticker: str, request: AnalyzeRequest | None = Body(default=None)):
+def analyze_ticker(
+    ticker: str,
+    config_name: str | None = Query(
+        default=None,
+        alias="config",
+        description="Optional config profile name from CONFIG_DIR, such as rbc or wealthsimple.",
+    ),
+    request: AnalyzeRequest | None = Body(default=None),
+):
     request = request or AnalyzeRequest()
 
     try:
-        config = load_config()
+        config = load_requested_config(config_name)
         configure_yfinance(config)
 
         watch_item = request.watch_item or find_watch_item(config, ticker)
@@ -166,12 +269,16 @@ def analyze_ticker(ticker: str, request: AnalyzeRequest | None = Body(default=No
         if request.strategy is not None:
             watch_item["strategy"] = request.strategy
 
-        return analyze_stock(
+        result = analyze_stock(
             ticker=ticker,
             config=config,
             watch_item=watch_item,
             include_summary=request.include_summary,
             send_discord=request.send_discord,
         )
+        result["config"] = selected_config_label(config_name)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

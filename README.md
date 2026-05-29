@@ -167,8 +167,10 @@ OpenAI research summary is skipped.
 
 `STOCK_AGENT_API_KEY` is required for protected API endpoints:
 
+- `GET /configs`
 - `GET /watchlist`
 - `POST /run`
+- `POST /run-all`
 - `POST /analyze/{ticker}`
 
 It is not required for `GET /` or `GET /health`.
@@ -836,14 +838,16 @@ Structure:
 Docker container
   FastAPI app
     GET  /health
+    GET  /configs
     POST /run
+    POST /run-all
     GET  /watchlist
     POST /analyze/{ticker}
 ```
 
 ### API Behavior
 
-- Loads `config.yaml`
+- Loads `config.yaml` or a named config profile from `CONFIG_DIR`
 - Fetches stock data with `yfinance`
 - Evaluates the configured rules
 - Optionally generates OpenAI summaries
@@ -851,7 +855,8 @@ Docker container
 - Optionally sends Discord alerts from inside the container
 
 By default the app reads `config.yaml` from the current working directory. In
-Docker, set `CONFIG_PATH` to point at the mounted config file.
+Docker, you can either set `CONFIG_PATH` for one config file or set
+`CONFIG_DIR` and `DEFAULT_CONFIG` for multiple named config profiles.
 
 Discord sending is off by default for API calls. Set `send_discord` to `true`
 in the request body when you want the container to send Discord messages.
@@ -918,8 +923,9 @@ The compose file:
 
 - reads secrets from `.env`
 - exposes port `8000`
-- mounts `/containers/stock-alert-agent` at `/config` as read-only
-- sets `CONFIG_PATH=/config/config.yaml`
+- mounts `/containers/stock-alert-agent/config` at `/configs` as read-only
+- sets `CONFIG_DIR=/configs`
+- sets `DEFAULT_CONFIG=rbc.yaml`
 - mounts `/containers/stock-alert-agent/crontab` into the scheduler container
 
 Stop the service:
@@ -944,12 +950,13 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
-      - CONFIG_PATH=/config/config.yaml
+      - CONFIG_DIR=/configs
+      - DEFAULT_CONFIG=rbc.yaml
       - TZ=America/Toronto
     ports:
       - "8898:8000"
     volumes:
-      - /containers/stock-alert-agent:/config:ro
+      - /containers/stock-alert-agent/config:/configs:ro
     restart: unless-stopped
 
   stock-alert-scheduler:
@@ -970,33 +977,47 @@ services:
 Create the host folder:
 
 ```bash
-mkdir -p /containers/stock-alert-agent
+mkdir -p /containers/stock-alert-agent/config
 ```
 
-Create the host config file:
+Create one config file per investment provider:
 
 ```bash
-nano /containers/stock-alert-agent/config.yaml
+nano /containers/stock-alert-agent/config/rbc.yaml
+nano /containers/stock-alert-agent/config/wealthsimple.yaml
 ```
 
-Paste your `config.yaml` content into that file. The volume mount points the
-host config folder into the container:
+Recommended host layout:
 
 ```text
 /containers/stock-alert-agent
+  crontab
+  config/
+    rbc.yaml
+    wealthsimple.yaml
+    test.yaml
 ```
 
-The app reads the file from:
+The app sees those config files inside the container as:
 
 ```text
-/config/config.yaml
+/configs/rbc.yaml
+/configs/wealthsimple.yaml
+/configs/test.yaml
 ```
 
-This directory-mount approach is recommended over mounting a single file. Some
-editors save files by replacing the file inode, and single-file Docker bind
-mounts can keep pointing at the old file until the container is recreated.
-Mounting the directory avoids that problem, so changes to `config.yaml` are
-picked up on the next `/run` or `/analyze/{ticker}` request.
+The crontab stays separate and is mounted only into the scheduler container:
+
+```text
+/containers/stock-alert-agent/crontab
+```
+
+This directory-mount approach is recommended over mounting single config files.
+Some editors save files by replacing the file inode, and single-file Docker
+bind mounts can keep pointing at the old file until the container is recreated.
+Mounting the config directory avoids that problem, so changes to provider YAML
+files are picked up on the next `/run`, `/run-all`, or `/analyze/{ticker}`
+request.
 
 #### Scheduler Sidecar Container
 
@@ -1014,21 +1035,26 @@ alert logic says to send, skip OpenAI summaries, and skip the full-watchlist
 summary:
 
 ```cron
-*/10 * * * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":false,"send_discord":true,"send_summary":false}'
+*/10 * * * * curl -s -X POST "http://stock-alert-agent:8000/run?config=rbc" -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":false,"send_discord":true,"send_summary":false}'
 ```
 
 Add one of these extra cron lines if you want a scheduled Discord summary:
 
 ```cron
-# Daily summary at 8 AM
-0 8 * * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
+# RBC daily summary at 9 AM
+0 9 * * * curl -s -X POST "http://stock-alert-agent:8000/run?config=rbc" -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
 
-# Weekly summary every Monday at 8 AM
-0 8 * * 1 curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
+# Wealthsimple daily summary at 11 AM
+0 11 * * * curl -s -X POST "http://stock-alert-agent:8000/run?config=wealthsimple" -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
 
-# Monthly summary on the first day of each month at 8 AM
-0 8 1 * * curl -s -X POST http://stock-alert-agent:8000/run -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
+# Run every config profile at 8 AM
+0 8 * * * curl -s -X POST "http://stock-alert-agent:8000/run-all" -H "X-API-Key: ${STOCK_AGENT_API_KEY}" -H "Content-Type: application/json" -d '{"include_summary":true,"send_discord":true,"send_summary":true}'
 ```
+
+Use `?config=rbc` to run `/configs/rbc.yaml`, `?config=wealthsimple` to run
+`/configs/wealthsimple.yaml`, and `/run-all` to run every `.yaml` or `.yml`
+file in `CONFIG_DIR`. Each config run sends its own separate Discord messages
+using that config's `agent.name`, watchlist, thresholds, and rules.
 
 In API requests, `send_summary` controls whether this run sends the
 full-watchlist Discord summary. The older `send_daily_summary` field still
@@ -1103,7 +1129,8 @@ environment:
   - OPENAI_API_KEY=${OPENAI_API_KEY}
   - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
   - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
-  - CONFIG_PATH=/config/config.yaml
+  - CONFIG_DIR=/configs
+  - DEFAULT_CONFIG=rbc.yaml
 ```
 
 then define those variables in the same environment where Compose runs, or put
@@ -1119,8 +1146,8 @@ Use `${VAR_NAME}` syntax, not `{VAR_NAME}`.
 
 #### Config Changes Not Appearing In The Container
 
-If edits to `config.yaml` only appear after restarting the container, you are
-probably using a single-file bind mount like this:
+If edits to a provider config only appear after restarting the container, you
+are probably using a single-file bind mount like this:
 
 ```yaml
 volumes:
@@ -1131,15 +1158,16 @@ Use a directory bind mount instead:
 
 ```yaml
 environment:
-  - CONFIG_PATH=/config/config.yaml
+  - CONFIG_DIR=/configs
+  - DEFAULT_CONFIG=rbc.yaml
 volumes:
-  - /containers/stock-alert-agent:/config:ro
+  - /containers/stock-alert-agent/config:/configs:ro
 ```
 
 Then verify the container sees the current config:
 
 ```bash
-docker exec stock-alert-agent cat /config/config.yaml
+docker exec stock-alert-agent cat /configs/rbc.yaml
 ```
 
 The app reloads the config file on each API request, so no restart is needed
@@ -1158,18 +1186,20 @@ type. With the recommended directory mount, the host path should be a directory:
 
 ```bash
 file /containers/stock-alert-agent
-ls -la /containers/stock-alert-agent/config.yaml
+ls -la /containers/stock-alert-agent/config
 ```
 
 You want `/containers/stock-alert-agent` to be a directory and
-`/containers/stock-alert-agent/config.yaml` to be a file.
+`/containers/stock-alert-agent/config` to be a directory containing provider
+YAML files.
 
-If Docker accidentally created `config.yaml` as a directory, remove it and
-recreate it as a file:
+If Docker accidentally created `config` as a file instead of a directory,
+remove it and recreate it as a directory:
 
 ```bash
-rm -r /containers/stock-alert-agent/config.yaml
-nano /containers/stock-alert-agent/config.yaml
+rm /containers/stock-alert-agent/config
+mkdir -p /containers/stock-alert-agent/config
+nano /containers/stock-alert-agent/config/rbc.yaml
 ```
 
 Then redeploy:
@@ -1195,30 +1225,55 @@ Example response:
   "status": "ok",
   "config_loaded": true,
   "watchlist_count": 2,
+  "config_dir": "/configs",
+  "default_config": "rbc.yaml",
+  "available_configs": [
+    {
+      "name": "rbc",
+      "file": "rbc.yaml",
+      "path": "/configs/rbc.yaml"
+    }
+  ],
   "openai_configured": true,
   "discord_configured": true,
   "api_auth_configured": true
 }
 ```
 
+#### `GET /configs`
+
+Lists config profiles discovered in `CONFIG_DIR`.
+
+```bash
+curl http://localhost:8000/configs \
+  -H "X-API-Key: replace-with-a-long-random-secret"
+```
+
 #### `GET /watchlist`
 
 Returns the current agent settings, alert settings, data settings, watchlist,
-and rules from `config.yaml`.
+and rules from the default config.
 
 ```bash
 curl http://localhost:8000/watchlist \
   -H "X-API-Key: replace-with-a-long-random-secret"
 ```
 
+To read a named config profile:
+
+```bash
+curl "http://localhost:8000/watchlist?config=wealthsimple" \
+  -H "X-API-Key: replace-with-a-long-random-secret"
+```
+
 #### `POST /analyze/{ticker}`
 
 Analyzes one ticker and returns JSON. This does not need the ticker to already
-exist in `config.yaml`. The response includes `threshold_result` when
+exist in the selected config. The response includes `threshold_result` when
 per-stock `alert_thresholds` are configured.
 
 ```bash
-curl -X POST http://localhost:8000/analyze/SNOW \
+curl -X POST "http://localhost:8000/analyze/SNOW?config=rbc" \
   -H "X-API-Key: replace-with-a-long-random-secret" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1248,11 +1303,12 @@ must be breached.
 
 #### `POST /run`
 
-Runs the full watchlist from `config.yaml`. Each result includes
+Runs the full watchlist from the default config or from a named config profile.
+Each result includes
 `threshold_result` when that stock has per-stock `alert_thresholds`.
 
 ```bash
-curl -X POST http://localhost:8000/run \
+curl -X POST "http://localhost:8000/run?config=rbc" \
   -H "X-API-Key: replace-with-a-long-random-secret" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1290,10 +1346,26 @@ For stocks with `alert_thresholds`, Discord sends only when at least one
 threshold is breached. Stocks without `alert_thresholds` use the normal
 score/signal alert behavior.
 
+#### `POST /run-all`
+
+Runs every `.yaml` and `.yml` config file in `CONFIG_DIR`. Each config is run
+separately, so Discord messages are sent separately per provider.
+
+```bash
+curl -X POST http://localhost:8000/run-all \
+  -H "X-API-Key: replace-with-a-long-random-secret" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "include_summary": true,
+    "send_discord": true,
+    "send_summary": true
+  }'
+```
+
 ### Docker Files
 
 - `Dockerfile`: builds the FastAPI container.
 - `docker-compose.yml`: local service runner with `.env`, port mapping, and
-  mounted `config.yaml`.
+  mounted provider config directory.
 - `.dockerignore`: keeps local secrets, virtual environments, and cache files
   out of the image.

@@ -2,6 +2,7 @@ import os
 import json
 import time
 import math
+import re
 import yaml
 import requests
 import yfinance as yf
@@ -9,6 +10,7 @@ import pandas as pd
 import numpy as np
 
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -25,12 +27,79 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
+CONFIG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+(\.ya?ml)?$")
 
-def load_config(path=None):
-    config_path = path or os.getenv("CONFIG_PATH", "config.yaml")
+
+def normalize_config_filename(config_name):
+    config_name = (config_name or "").strip()
+
+    if not CONFIG_NAME_PATTERN.fullmatch(config_name):
+        raise ValueError(
+            "Invalid config name. Use only letters, numbers, hyphens, and underscores."
+        )
+
+    if config_name.endswith((".yaml", ".yml")):
+        return config_name
+
+    return f"{config_name}.yaml"
+
+
+def resolve_config_path(path=None, config_name=None):
+    if config_name:
+        config_dir = os.getenv("CONFIG_DIR")
+        if not config_dir:
+            raise ValueError("CONFIG_DIR must be set to use named config files.")
+
+        config_path = Path(config_dir) / normalize_config_filename(config_name)
+        if not config_path.is_file():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+
+        return config_path
+
+    if path:
+        return Path(path)
+
+    if os.getenv("CONFIG_PATH"):
+        return Path(os.getenv("CONFIG_PATH"))
+
+    config_dir = os.getenv("CONFIG_DIR")
+    default_config = os.getenv("DEFAULT_CONFIG")
+    if config_dir and default_config:
+        return Path(config_dir) / normalize_config_filename(default_config)
+
+    return Path("config.yaml")
+
+
+def load_config(path=None, config_name=None):
+    config_path = resolve_config_path(path=path, config_name=config_name)
 
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
+
+
+def list_config_profiles():
+    config_dir = os.getenv("CONFIG_DIR")
+    if not config_dir:
+        return []
+
+    config_root = Path(config_dir)
+    if not config_root.is_dir():
+        return []
+
+    profiles = []
+    for config_path in sorted(config_root.iterdir()):
+        if not config_path.is_file() or config_path.suffix not in (".yaml", ".yml"):
+            continue
+        if config_path.name.startswith("."):
+            continue
+
+        profiles.append({
+            "name": config_path.stem,
+            "file": config_path.name,
+            "path": str(config_path),
+        })
+
+    return profiles
 
 
 # ----------------------------
