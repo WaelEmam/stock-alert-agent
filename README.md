@@ -402,7 +402,7 @@ thresholds.
 | --- | --- | --- |
 | `name` | `"Home Stock Alert Agent"` | Display name used in summaries and error messages. |
 | `model` | `"gpt-4.1-mini"` | OpenAI model used when summaries are enabled and `OPENAI_API_KEY` is set. |
-| `timezone` | `"America/Toronto"` | Intended timezone for the agent. Current timestamps use the container or host runtime clock. |
+| `timezone` | `"America/Toronto"` | Timezone used by the app for run timestamps. Cron schedules still use the scheduler container's `TZ` setting. |
 
 Example:
 
@@ -938,13 +938,14 @@ Example `docker-compose.yml`:
 ```yaml
 services:
   stock-alert-agent:
-    image: waelemam/stock-alert-agent:1.1.1
+    image: waelemam/stock-alert-agent:latest
     container_name: stock-alert-agent
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
       - CONFIG_PATH=/config/config.yaml
+      - TZ=America/Toronto
     ports:
       - "8898:8000"
     volumes:
@@ -958,10 +959,11 @@ services:
       - stock-alert-agent
     environment:
       - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+      - TZ=America/Toronto
     volumes:
       - /containers/stock-alert-agent/crontab:/etc/crontabs/root:ro
     command: >
-      sh -c "apk add --no-cache curl && crond -f -l 8"
+      sh -c "apk add --no-cache curl tzdata && crond -f -l 8"
     restart: unless-stopped
 ```
 
@@ -1032,6 +1034,14 @@ In API requests, `send_summary` controls whether this run sends the
 full-watchlist Discord summary. The older `send_daily_summary` field still
 works, but `send_summary` is clearer for daily, weekly, or monthly schedules.
 
+When `include_summary` is `true` and `OPENAI_API_KEY` is configured, the
+full-watchlist Discord summary includes an **OpenAI Research Summary** section.
+That section is generated from the latest stock data, triggered rules,
+threshold breaches, and recent news available from the data source. Set
+`include_summary:false` for frequent threshold-only jobs to avoid extra OpenAI
+usage. A summary run with `include_summary:true` can make one OpenAI call per
+stock plus one additional watchlist-level summary call.
+
 Inside Docker Compose, the scheduler calls the API service by container/service
 name:
 
@@ -1043,14 +1053,20 @@ Do not use `localhost:8000` inside the scheduler container. In that container,
 `localhost` means the scheduler container itself.
 
 The `*/10 * * * *` cron expression runs at minute `0`, `10`, `20`, `30`, `40`,
-and `50` of every hour. It is based on the container clock, not on when the
-container started.
+and `50` of every hour. It is based on the scheduler container clock, not on
+when the container started.
 
-The scheduler uses `alpine:latest` and installs `curl` when it starts:
+The `agent.timezone` value in `config.yaml` controls app timestamps in API and
+Discord output. It does not control when cron runs. Cron uses the scheduler
+container timezone, so set `TZ=America/Toronto` on the scheduler service and
+install `tzdata` in the Alpine container.
+
+The scheduler uses `alpine:latest` and installs `curl` plus `tzdata` when it
+starts:
 
 ```yaml
 command: >
-  sh -c "apk add --no-cache curl && crond -f -l 8"
+  sh -c "apk add --no-cache curl tzdata && crond -f -l 8"
 ```
 
 Start the stack:
@@ -1261,6 +1277,14 @@ curl -X POST http://localhost:8000/run \
 `send_summary` controls whether this `/run` call sends the full-watchlist
 Discord summary. Use it for daily, weekly, or monthly scheduled summary jobs.
 The older `send_daily_summary` request field is still accepted as an alias.
+
+If `"include_summary": true` and `OPENAI_API_KEY` is configured, the Discord
+summary also includes an **OpenAI Research Summary** section with a concise
+watchlist-level readout, priority reviews, per-ticker notes, and suggested
+items to check next. If `"include_summary": false`, the Discord summary only
+includes the compact ticker, signal, and score list. A summary run with
+`include_summary:true` can make one OpenAI call per stock plus one additional
+watchlist-level summary call.
 
 For stocks with `alert_thresholds`, Discord sends only when at least one
 threshold is breached. Stocks without `alert_thresholds` use the normal

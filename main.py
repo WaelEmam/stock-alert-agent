@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -58,6 +59,18 @@ def pct_change(current, reference):
     if reference is None or reference == 0 or pd.isna(reference):
         return None
     return ((current - reference) / reference) * 100
+
+
+def get_agent_now(config):
+    timezone_name = config.get("agent", {}).get("timezone")
+
+    if timezone_name:
+        try:
+            return datetime.now(ZoneInfo(timezone_name))
+        except ZoneInfoNotFoundError:
+            pass
+
+    return datetime.now()
 
 
 # ----------------------------
@@ -420,6 +433,99 @@ Return:
         return f"OpenAI summary failed: {e}"
 
 
+def generate_portfolio_summary(results, config):
+    if not client:
+        return "OpenAI portfolio summary skipped because OPENAI_API_KEY is not set."
+
+    model = config["agent"].get("model", "gpt-4.1-mini")
+
+    summary_items = []
+    for result in results:
+        if result["status"] != "ok":
+            summary_items.append({
+                "ticker": result["ticker"],
+                "status": "error",
+                "error": result.get("error"),
+            })
+            continue
+
+        stock_data = result["stock_data"]
+        rule_result = result["rule_result"]
+        threshold_result = result.get("threshold_result", {})
+
+        summary_items.append({
+            "ticker": result["ticker"],
+            "name": result.get("watch_item", {}).get("name"),
+            "strategy": result.get("watch_item", {}).get("strategy"),
+            "position_pct": result.get("watch_item", {}).get("position_pct"),
+            "cost_basis": result.get("watch_item", {}).get("cost_basis"),
+            "current_price": stock_data.get("current_price"),
+            "daily_change_pct": stock_data.get("daily_change_pct"),
+            "rsi": stock_data.get("rsi"),
+            "sma_50": stock_data.get("sma_50"),
+            "sma_200": stock_data.get("sma_200"),
+            "forward_pe": stock_data.get("forward_pe"),
+            "revenue_growth": stock_data.get("revenue_growth"),
+            "earnings_growth": stock_data.get("earnings_growth"),
+            "analyst_recommendation": stock_data.get("analyst_recommendation"),
+            "target_mean_price": stock_data.get("target_mean_price"),
+            "signal": rule_result.get("signal"),
+            "score": rule_result.get("score"),
+            "gain_loss_pct": rule_result.get("gain_loss_pct"),
+            "triggered_rules": rule_result.get("triggered_rules", [])[:5],
+            "warnings": rule_result.get("warnings", [])[:3],
+            "threshold_breached": threshold_result.get("breached"),
+            "threshold_breaches": threshold_result.get("breaches", [])[:3],
+            "news": [
+                item.get("title")
+                for item in stock_data.get("news", [])[:3]
+                if item.get("title")
+            ],
+        })
+
+    prompt = {
+        "role": "user",
+        "content": f"""
+You are a cautious stock research assistant summarizing a watchlist alert run.
+
+Important:
+- Do not provide personalized financial advice.
+- Do not claim certainty.
+- Do not tell the user they must buy or sell.
+- Base your analysis only on the supplied data.
+- Be concise enough for a Discord message.
+- Focus on what deserves review, what changed, risks, and what to check next.
+
+Watchlist run data:
+{json.dumps(summary_items, indent=2, default=str)}
+
+Return:
+1. Overall readout in 2-3 bullets
+2. Highest-priority reviews, if any
+3. One concise note per ticker
+4. What to check next
+"""
+    }
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a cautious investment research assistant for alerting only, not a financial advisor.",
+                },
+                prompt,
+            ],
+            temperature=0.2,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        return f"OpenAI portfolio summary failed: {e}"
+
+
 # ----------------------------
 # Discord alerting
 # ----------------------------
@@ -759,7 +865,7 @@ def run_agent(
     config = config or load_config()
     configure_yfinance(config)
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = get_agent_now(config).strftime("%Y-%m-%d %H:%M:%S %Z")
     agent_name = config["agent"].get("name", "Stock Alert Agent")
     alerts = config.get("alerts", {})
 
@@ -817,7 +923,11 @@ def run_agent(
     }
 
     summary_sent = False
+    portfolio_summary = None
     if send_discord and send_summary:
+        if include_summary:
+            portfolio_summary = generate_portfolio_summary(results, config)
+
         summary_lines = [
             f"**{agent_name} Summary**",
             f"Run time: `{now}`",
@@ -835,6 +945,13 @@ def run_agent(
                 summary_lines.append(f"- `{result['ticker']}`: **ERROR**")
 
         summary_lines.append("")
+        if portfolio_summary:
+            summary_lines.extend([
+                "**OpenAI Research Summary**",
+                portfolio_summary,
+                "",
+            ])
+
         summary_lines.append("_Not financial advice. Alerts are for research review only._")
 
         send_discord_message("\n".join(summary_lines))
@@ -843,6 +960,7 @@ def run_agent(
     return to_json_safe({
         "status": "ok" if summary["error_count"] == 0 else "partial",
         "summary": summary,
+        "portfolio_summary": portfolio_summary,
         "summary_sent": summary_sent,
         "daily_summary_sent": summary_sent,
         "results": results,

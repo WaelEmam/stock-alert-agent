@@ -1,12 +1,13 @@
 services:
   stock-alert-agent:
-    image: waelemam/stock-alert-agent:1.1.1
+    image: waelemam/stock-alert-agent:latest
     container_name: stock-alert-agent
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
       - CONFIG_PATH=/config/config.yaml
+      - TZ=America/Toronto
     ports:
       - "8000:8000"
     volumes:
@@ -20,8 +21,9 @@ services:
       - stock-alert-agent
     environment:
       - STOCK_AGENT_API_KEY=${STOCK_AGENT_API_KEY}
+      - TZ=America/Toronto
     volumes:
       - /containers/stock-alert-agent/crontab:/etc/crontabs/root:ro
     command: >
-      sh -c "apk add --no-cache curl && crond -f -l 8"
+      sh -c "apk add --no-cache curl tzdata && crond -f -l 8"
     restart: unless-stopped

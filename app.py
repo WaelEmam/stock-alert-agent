@@ -19,7 +19,7 @@ from main import (
 app = FastAPI(
     title="Stock Alert Agent API",
     description="FastAPI service for running stock reviews and optional Discord alerts.",
-    version="1.1.3",
+    version="1.2.0",
 )
 
 
